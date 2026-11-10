@@ -403,3 +403,4 @@ const seedDatabase = async () => {
 };
 
 seedDatabase();
+

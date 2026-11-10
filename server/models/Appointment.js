@@ -103,3 +103,4 @@ appointmentSchema.index(
 );
 
 module.exports = mongoose.model('Appointment', appointmentSchema);
+

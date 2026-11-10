@@ -84,3 +84,4 @@ This document captures key technical decisions, architectural patterns, business
 2. **Telemedicine / Video Consultations:** WebRTC or Zoom integration for virtual doctor-patient consultations.
 3. **Electronic Health Records (EHR) & Prescriptions:** PDF prescription generator and lab test report file uploads.
 4. **Payment Gateway Integration:** Stripe / Razorpay integration for online consultation fee prepayments.
+

@@ -15,3 +15,4 @@ router.post('/', createUser);
 router.patch('/:id/status', toggleUserStatus);
 
 module.exports = router;
+

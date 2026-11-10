@@ -162,3 +162,4 @@ module.exports = {
   getPatientById,
   updatePatientProfile,
 };
+

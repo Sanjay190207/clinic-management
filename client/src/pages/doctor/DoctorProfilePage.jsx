@@ -225,3 +225,4 @@ const DoctorProfilePage = () => {
 };
 
 export default DoctorProfilePage;
+

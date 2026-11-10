@@ -173,3 +173,4 @@ appointmentSchema.index(
 | `appointments` | `patientId: 1, appointmentDate: -1` | Compound | Fast retrieval of patient history |
 | `appointments` | `doctorId: 1, appointmentDate: 1` | Compound | Fast doctor daily/weekly schedule loading |
 | `appointments` | `doctorId: 1, appointmentDate: 1, startTime: 1` | Unique Partial | **Simultaneous booking race-condition prevention** |
+

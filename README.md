@@ -211,3 +211,4 @@ clinic-appointment-management/
 
 ## 8. License & Author
 Developed as a production-quality clinic management solution following modern full-stack best practices.
+

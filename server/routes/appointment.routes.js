@@ -20,3 +20,4 @@ router.patch('/:id/cancel', protect, authorize('patient', 'receptionist', 'admin
 router.patch('/:id/status', protect, authorize('doctor', 'receptionist', 'admin'), updateAppointmentStatus);
 
 module.exports = router;
+

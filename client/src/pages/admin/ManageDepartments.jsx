@@ -293,3 +293,4 @@ const ManageDepartments = () => {
 };
 
 export default ManageDepartments;
+

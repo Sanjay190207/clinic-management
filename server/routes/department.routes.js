@@ -19,3 +19,4 @@ router.put('/:id', protect, authorize('admin'), updateDepartment);
 router.delete('/:id', protect, authorize('admin'), deleteDepartment);
 
 module.exports = router;
+

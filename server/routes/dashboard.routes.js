@@ -12,3 +12,4 @@ router.get('/doctor', protect, authorize('doctor'), getDoctorDashboard);
 router.get('/admin', protect, authorize('admin', 'receptionist'), getAdminDashboard);
 
 module.exports = router;
+

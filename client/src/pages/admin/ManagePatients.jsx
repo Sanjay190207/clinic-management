@@ -215,3 +215,4 @@ const ManagePatients = () => {
 };
 
 export default ManagePatients;
+

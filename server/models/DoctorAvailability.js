@@ -70,3 +70,4 @@ const doctorAvailabilitySchema = new mongoose.Schema(
 doctorAvailabilitySchema.index({ doctorId: 1, dayOfWeek: 1 }, { unique: true });
 
 module.exports = mongoose.model('DoctorAvailability', doctorAvailabilitySchema);
+

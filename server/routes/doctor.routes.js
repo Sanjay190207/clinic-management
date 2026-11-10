@@ -33,3 +33,4 @@ router.post('/:id/availability', protect, authorize('admin', 'doctor'), setDocto
 router.put('/:id/availability/:availabilityId', protect, authorize('admin', 'doctor'), updateDoctorAvailability);
 
 module.exports = router;
+

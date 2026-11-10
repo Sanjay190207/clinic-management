@@ -265,3 +265,4 @@ const ManageDoctors = () => {
 };
 
 export default ManageDoctors;
+

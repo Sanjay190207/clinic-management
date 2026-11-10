@@ -341,3 +341,4 @@ This document describes all REST API endpoints for the CarePulse Clinic Appointm
 ### `PATCH /api/users/:id/status`
 - **Permitted Roles:** `admin` strictly.
 - **Description:** Toggles active/deactive status (cannot deactivate own admin account).
+

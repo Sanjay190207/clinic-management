@@ -58,3 +58,4 @@ doctorSchema.virtual('availability', {
 });
 
 module.exports = mongoose.model('Doctor', doctorSchema);
+

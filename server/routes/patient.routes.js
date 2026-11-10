@@ -12,3 +12,4 @@ router.get('/', protect, authorize('admin', 'receptionist'), getPatients);
 router.get('/:id', protect, getPatientById);
 
 module.exports = router;
+

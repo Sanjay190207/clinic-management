@@ -242,3 +242,4 @@ const AppointmentHistory = () => {
 };
 
 export default AppointmentHistory;
+

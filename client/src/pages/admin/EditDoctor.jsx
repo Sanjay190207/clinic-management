@@ -263,3 +263,4 @@ const EditDoctor = () => {
 };
 
 export default EditDoctor;
+

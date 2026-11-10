@@ -13,3 +13,4 @@ const generateAppointmentReference = (dateStr) => {
 module.exports = {
   generateAppointmentReference,
 };
+
