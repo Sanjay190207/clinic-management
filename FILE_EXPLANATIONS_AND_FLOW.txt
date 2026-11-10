@@ -1,0 +1,797 @@
+================================================================================
+CAREPULSE CLINIC APPOINTMENT MANAGEMENT SYSTEM
+COMPLETE CODEBASE ARCHITECTURE, FILE-BY-FILE BREAKDOWN, AND WORKFLOW GUIDE
+================================================================================
+
+TABLE OF CONTENTS:
+--------------------------------------------------------------------------------
+PART 1: SYSTEM ARCHITECTURE & HIGH-LEVEL DESIGN OVERVIEW
+PART 2: BACKEND ARCHITECTURE & FILE-BY-FILE EXPLANATION
+   2.1 Root Server Files (server.js, app.js)
+   2.2 Database Configuration (config/db.js)
+   2.3 Data Models & Database Schemas (models/)
+   2.4 Security & Routing Middleware (middleware/)
+   2.5 Utility Modules (utils/)
+   2.6 API Route Controllers (controllers/)
+   2.7 Express Route Definitions (routes/)
+   2.8 Database Scripts (scripts/)
+PART 3: FRONTEND ARCHITECTURE & FILE-BY-FILE EXPLANATION
+   3.1 Build & Entry Configuration (index.html, vite.config.js, package.json, main.jsx)
+   3.2 Application Routing & Root Component (App.jsx)
+   3.3 Global Styling System (styles/index.css)
+   3.4 API Services & HTTP Interceptors (services/api.js)
+   3.5 Authentication Context & State Management (context/AuthContext.jsx)
+   3.6 Route Protection & Role Guards (routes/ProtectedRoute.jsx)
+   3.7 Common Layouts & Navigation UI (layouts/, components/common/)
+   3.8 Public Facing Pages (pages/public/)
+   3.9 Patient Portal Pages (pages/patient/)
+   3.10 Doctor Portal Pages (pages/doctor/)
+   3.11 Administrator & Receptionist Consoles (pages/admin/)
+PART 4: ROOT CONFIGURATION & SYSTEM DOCUMENTATION FILES
+PART 5: COMPLETE END-TO-END SYSTEM WORKFLOWS (FLOW EXPLANATIONS)
+   5.1 Flow 1: User Registration & Authentication Flow
+   5.2 Flow 2: Doctor Creation & Working Hours Provisioning Flow
+   5.3 Flow 3: Slot Generation & Atomic Appointment Booking Flow (Race Condition Prevention)
+   5.4 Flow 4: Clinic Consultation Flow (Check In -> Complete / Notes)
+   5.5 Flow 5: Appointment Cancellation & Slot Release Flow
+   5.6 Flow 6: Role-Based Authorization & Protected Route Flow
+
+
+================================================================================
+PART 1: SYSTEM ARCHITECTURE & HIGH-LEVEL DESIGN OVERVIEW
+================================================================================
+
+The Clinic Appointment Management System follows a decoupled Client-Server architecture:
+1. CLIENT (Frontend):
+   - Single Page Application (SPA) built using React.js 18 and Vite.
+   - Client-side routing managed by React Router DOM v7.
+   - Global reactive state for authentication managed by React Context API.
+   - HTTP communication handled by Axios with automatic request token attachment and 401 unauthenticated interceptors.
+   - Custom responsive healthcare design system styled via pure CSS3 variables and utility classes.
+
+2. SERVER (Backend):
+   - RESTful API service built on Node.js and Express.js.
+   - Stateless JWT (JSON Web Token) authentication with bearer authorization headers.
+   - Password security via bcryptjs with salt factor 10.
+   - Helmet security headers, CORS origin whitelisting, and IP-based rate limiting on authentication routes.
+   - Centralized error handling catching Mongoose CastErrors, ValidationErrors, and MongoDB code 11000 duplicate keys.
+
+3. DATABASE (Data Persistence):
+   - MongoDB database operated via Mongoose ODM.
+   - Atomic concurrency protection via compound unique partial indexes on appointments to strictly prevent double bookings.
+   - Automatic cascade-awareness: soft-deactivation of departments with active doctors, release of appointment slots upon cancellation.
+
+
+================================================================================
+PART 2: BACKEND ARCHITECTURE & FILE-BY-FILE EXPLANATION
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 ROOT SERVER FILES
+--------------------------------------------------------------------------------
+
+1. [server/server.js]
+   - Purpose: Main application entry point for the backend runtime.
+   - Functions & Responsibilities:
+     * Loads environment variables from root `.env` or local `.env` using dotenv.
+     * Calls `connectDB()` to establish a connection to MongoDB before listening.
+     * Starts the HTTP server on `PORT` (default: 5000).
+     * Binds process-level listeners (`unhandledRejection`) to handle unexpected promises gracefully without crashing the server.
+   - Connections:
+     * Imports `connectDB` from `server/config/db.js`.
+     * Imports configured Express application instance `app` from `server/app.js`.
+
+2. [server/app.js]
+   - Purpose: Express application assembly, middleware configuration, and route registration.
+   - Functions & Responsibilities:
+     * Attaches `helmet()` for secure HTTP response headers.
+     * Configures `cors()` to permit incoming requests only from the authorized frontend origin (`CLIENT_URL`).
+     * Parses incoming JSON and URL-encoded request bodies (`express.json({ limit: '1mb' })`).
+     * Attaches `morgan('dev')` logging in development mode.
+     * Mounts `authLimiter` (express-rate-limit) on `/api/auth` to prevent brute-force login attacks.
+     * Defines system healthcheck endpoint: `GET /api/health`.
+     * Mounts modular API route handlers under the `/api` prefix:
+       - `/api/auth` -> `auth.routes.js`
+       - `/api/departments` -> `department.routes.js`
+       - `/api/doctors` -> `doctor.routes.js`
+       - `/api/appointments` -> `appointment.routes.js`
+       - `/api/patients` -> `patient.routes.js`
+       - `/api/dashboard` -> `dashboard.routes.js`
+       - `/api/users` -> `user.routes.js`
+     * Catches undefined routes with a generic 404 JSON responder.
+     * Mounts `errorHandler` centralized middleware at the very end of the pipeline.
+   - Connections:
+     * Imports all route files from `server/routes/`.
+     * Imports `errorHandler` from `server/middleware/error.middleware.js`.
+     * Exported to `server/server.js` and `server/scripts/run-tests.js`.
+
+
+--------------------------------------------------------------------------------
+2.2 DATABASE CONFIGURATION
+--------------------------------------------------------------------------------
+
+3. [server/config/db.js]
+   - Purpose: Establishes and manages the connection between Mongoose and MongoDB.
+   - Functions & Responsibilities:
+     * `connectDB()`: Async function connecting to `process.env.MONGODB_URI` (defaulting to `mongodb://127.0.0.1:27017/clinic_appointment_db`).
+     * Configures `serverSelectionTimeoutMS: 5000` to quickly fail if MongoDB is unreachable.
+     * Logs connected host and database name on success; logs error and calls `process.exit(1)` on connection failure.
+   - Connections:
+     * Called during startup in `server/server.js`, `server/scripts/seed.js`, and `server/scripts/run-tests.js`.
+
+
+--------------------------------------------------------------------------------
+2.3 DATA MODELS & DATABASE SCHEMAS (models/)
+--------------------------------------------------------------------------------
+
+4. [server/models/User.js]
+   - Purpose: Mongoose schema and model representing registered human users across all 4 system roles.
+   - Fields:
+     * `name` (String, required, trimmed, max 100)
+     * `email` (String, required, unique, lowercase, trimmed, regex email validated)
+     * `phone` (String, required, trimmed)
+     * `password` (String, required, min 6, select: false to prevent accidental exposure)
+     * `role` (Enum: `['patient', 'doctor', 'receptionist', 'admin']`, default: `'patient'`)
+     * `isActive` (Boolean, default: true)
+     * `timestamps` (createdAt, updatedAt)
+   - Methods & Hooks:
+     * `userSchema.pre('save')`: Hashes password using `bcrypt.hash()` with salt factor 10 if password was modified.
+     * `userSchema.methods.matchPassword(enteredPassword)`: Compares candidate plaintext password against stored bcrypt hash using `bcrypt.compare()`.
+   - Connections:
+     * Used by `auth.controller.js` for registration/login.
+     * Referenced by `Doctor.js` via `userId`.
+     * Referenced by `Appointment.js` via `patientId` and `cancelledBy`.
+     * Queried by `patient.controller.js` and `user.controller.js`.
+
+5. [server/models/Department.js]
+   - Purpose: Schema representing clinical medical specialties (e.g., Cardiology, General Medicine, Pediatrics).
+   - Fields:
+     * `name` (String, required, unique, trimmed, max 100)
+     * `description` (String, required, trimmed, max 500)
+     * `isActive` (Boolean, default: true)
+     * `timestamps` (createdAt, updatedAt)
+   - Connections:
+     * Referenced by `Doctor.js` via `departmentId`.
+     * Referenced by `Appointment.js` via `departmentId`.
+     * Managed by `department.controller.js`.
+
+6. [server/models/Doctor.js]
+   - Purpose: Schema representing professional physician clinical profiles.
+   - Fields:
+     * `userId` (ObjectId referencing `User`, required, unique - enforces 1:1 relationship with a user account)
+     * `departmentId` (ObjectId referencing `Department`, required)
+     * `qualification` (String, required, e.g. "MBBS, MD (Cardiology)")
+     * `experience` (Number, required, years of practice, min: 0)
+     * `consultationFee` (Number, required, outpatient consultation rate in USD, min: 0)
+     * `description` (String, required, doctor biography, max 1000)
+     * `profileImage` (String, image URL)
+     * `isActive` (Boolean, default: true)
+     * `timestamps`
+     * Virtual populate: `availability` referencing `DoctorAvailability` on foreignField `doctorId`.
+   - Connections:
+     * Links `User` and `Department`.
+     * Referenced by `DoctorAvailability.js` and `Appointment.js`.
+     * Managed by `doctor.controller.js`.
+
+7. [server/models/DoctorAvailability.js]
+   - Purpose: Schema defining weekly recurring shift schedules and protected break periods for each doctor.
+   - Fields:
+     * `doctorId` (ObjectId referencing `Doctor`, required)
+     * `dayOfWeek` (Number, 0 = Sunday, 1 = Monday ... 6 = Saturday)
+     * `dayName` (Enum string matching day name)
+     * `startTime` (String, 24-hr `HH:mm`, e.g. "09:00")
+     * `endTime` (String, 24-hr `HH:mm`, e.g. "17:00")
+     * `slotDuration` (Number in minutes, default: 30, min: 10, max: 120)
+     * `breakPeriods` (Array of subdocuments: `{ startTime, endTime, reason }` e.g. 13:00 - 14:00 Lunch Break)
+     * `isAvailable` (Boolean, default: true)
+   - Indexes:
+     * `{ doctorId: 1, dayOfWeek: 1 }` (Unique compound index) - Guarantees that a physician has at most one schedule definition per day of the week.
+   - Connections:
+     * Read by `availability.controller.js` to dynamically generate open booking slots.
+
+8. [server/models/Appointment.js]
+   - Purpose: Schema representing booked, active, completed, or cancelled consultation visits.
+   - Fields:
+     * `appointmentReference` (String, unique, format `APT-YYYYMMDD-XXXX`)
+     * `patientId` (ObjectId referencing `User`, required)
+     * `doctorId` (ObjectId referencing `Doctor`, required)
+     * `departmentId` (ObjectId referencing `Department`, required)
+     * `appointmentDate` (String in `YYYY-MM-DD` ISO format, timezone safe)
+     * `startTime` (String in `HH:mm` 24-hr format, e.g. "09:30")
+     * `endTime` (String in `HH:mm` 24-hr format, e.g. "10:00")
+     * `status` (Enum: `['Booked', 'Checked In', 'Completed', 'Cancelled', 'No Show']`, default: `'Booked'`)
+     * `consultationFee` (Number, snapshot of fee at time of booking)
+     * `reasonForVisit` (String, reason entered by patient)
+     * `notes` (String, clinical notes added by physician or receptionist)
+     * `cancelledAt` (Date, timestamp of cancellation)
+     * `cancelledBy` (ObjectId referencing `User`)
+     * `cancellationReason` (String)
+     * `timestamps`
+   - Indexes & Concurrency Protection:
+     * Query indexes on `patientId`, `doctorId`, `departmentId`, `status`.
+     * CRITICAL COMPOUND UNIQUE PARTIAL INDEX:
+       `{ doctorId: 1, appointmentDate: 1, startTime: 1 }`
+       `partialFilterExpression: { status: { $in: ['Booked', 'Checked In', 'Completed'] } }`
+       Enforces atomic double-booking prevention in MongoDB storage engine. Automatically frees the slot when status transitions to `Cancelled` or `No Show`.
+   - Connections:
+     * Central model of the system; manipulated by `appointment.controller.js`.
+
+
+--------------------------------------------------------------------------------
+2.4 SECURITY & ROUTING MIDDLEWARE (middleware/)
+--------------------------------------------------------------------------------
+
+9. [server/middleware/auth.middleware.js]
+   - Purpose: Authenticates JSON Web Tokens and enforces Role-Based Access Control (RBAC).
+   - Functions:
+     * `protect(req, res, next)`: Extracts Bearer token from `req.headers.authorization`. Verifies token using `verifyToken()`. Queries `User.findById(decoded.id)`. Rejects if user does not exist or if `user.isActive === false`. Attaches sanitized user document to `req.user` and calls `next()`.
+     * `authorize(...roles)`: Higher-order middleware accepting permitted roles (e.g. `authorize('admin')` or `authorize('admin', 'receptionist')`). Checks if `roles.includes(req.user.role)`. If matched, calls `next()`; otherwise returns `403 Forbidden`.
+   - Connections:
+     * Uses `verifyToken` from `server/utils/jwt.js`.
+     * Used by all protected routes in `server/routes/`.
+
+10. [server/middleware/error.middleware.js]
+    - Purpose: Centralized Express error-handling middleware intercepting thrown exceptions.
+    - Functions:
+      * `errorHandler(err, req, res, next)`:
+        - Logs error message with timestamp to server console.
+        - Translates Mongoose `CastError` (invalid ObjectId) to `404 Resource not found`.
+        - Translates Mongoose `ValidationError` to `400 Bad Request` with field-level error dictionary.
+        - Translates MongoDB `code 11000` (Duplicate Key):
+          * If duplicate key is on appointment `(doctorId, appointmentDate, startTime)`, returns `409 Conflict` with `conflict: 'SLOT_ALREADY_BOOKED'`.
+          * If duplicate email, returns `409 An account with this email already exists`.
+        - Translates `JsonWebTokenError` and `TokenExpiredError` to `401 Unauthorized`.
+        - Returns safe JSON response without exposing internal server stack traces to clients.
+    - Connections:
+      * Mounted in `server/app.js` as the final middleware.
+
+
+--------------------------------------------------------------------------------
+2.5 UTILITY MODULES (utils/)
+--------------------------------------------------------------------------------
+
+11. [server/utils/jwt.js]
+    - Purpose: JWT generation and verification utility.
+    - Functions:
+      * `generateToken(id, role)`: Signs `{ id, role }` using `JWT_SECRET` with configurable expiry (default: `7d`).
+      * `verifyToken(token)`: Decodes and verifies token signature and expiration.
+    - Connections:
+      * Used by `auth.controller.js` and `auth.middleware.js`.
+
+12. [server/utils/timeUtils.js]
+    - Purpose: Time calculations, slot division, break-time checks, and cutoff validation.
+    - Functions:
+      * `timeToMinutes(timeStr)`: Converts `"09:30"` to minutes from midnight (`570`).
+      * `minutesToTime(totalMinutes)`: Converts `570` back to `"09:30"`.
+      * `isOverlapping(start1, end1, start2, end2)`: Mathematical interval overlap check.
+      * `isInBreakPeriod(slotStart, slotEnd, breakPeriods)`: Determines if a candidate slot overlaps with doctor lunch or rest periods.
+      * `isPastDate(dateStr)`: Checks if a date string is strictly before today in clinic local time.
+      * `isPastDateTime(dateStr, timeStr)`: Checks if a specific time slot on today's date has already elapsed.
+      * `canCancelAppointment(appointmentDate, startTime, cutoffHours)`: Evaluates whether the appointment start time is at least `cutoffHours` (default: 2) in the future.
+      * `generateSlots(availability, bookedSlots, dateStr)`: Iterates from shift start to shift end in steps of `slotDuration`. For each slot, marks `isAvailable: true` only if not in a break, not already booked, and not in the past.
+    - Connections:
+      * Core engine used by `availability.controller.js` and `appointment.controller.js`.
+
+13. [server/utils/referenceGenerator.js]
+    - Purpose: Generates human-readable, unique appointment reference identifiers.
+    - Functions:
+      * `generateAppointmentReference(dateStr)`: Combines prefix, date string, and cryptographically secure random hexadecimal characters (e.g. `APT-20261110-A9F3`).
+    - Connections:
+      * Used in `appointment.controller.js` and `scripts/seed.js`.
+
+
+--------------------------------------------------------------------------------
+2.6 API ROUTE CONTROLLERS (controllers/)
+--------------------------------------------------------------------------------
+
+14. [server/controllers/auth.controller.js]
+    - Purpose: Handles user authentication, registration, token issuance, and current session retrieval.
+    - Handlers:
+      * `register(req, res, next)`: Validates input; ensures email uniqueness; creates new `User` with role `'patient'`; returns JWT and user payload (status 201).
+      * `login(req, res, next)`: Validates credentials; checks `isActive`; verifies password using `matchPassword()`; generates token; returns token and user payload (status 200).
+      * `logout(req, res)`: Returns success confirmation for client-side token discard.
+      * `getMe(req, res, next)`: Returns the current user profile from `req.user`.
+
+15. [server/controllers/department.controller.js]
+    - Purpose: CRUD operations on clinical medical departments.
+    - Handlers:
+      * `getDepartments`: Public endpoint listing active departments (or all if admin `?all=true`); aggregates active doctor count for each department.
+      * `getDepartmentById`: Returns department info and list of active doctors assigned to it.
+      * `createDepartment`: Admin-only endpoint creating new department with uniqueness check.
+      * `updateDepartment`: Admin-only endpoint updating department details and active flag.
+      * `deleteDepartment`: Admin-only endpoint; checks if active doctors exist—soft-deactivates if doctors exist, or hard-deletes if vacant.
+
+16. [server/controllers/doctor.controller.js]
+    - Purpose: Complete lifecycle management of doctors.
+    - Handlers:
+      * `getDoctors`: Public endpoint supporting search by doctor name/qualification and filtering by department.
+      * `getDoctorById`: Retrieves doctor profile with populated User and Department, plus weekly availability schedule.
+      * `createDoctor`: Admin-only atomic endpoint that creates both the `User` account (role: `'doctor'`) and `Doctor` profile, and provisions default Monday–Friday availability schedules.
+      * `updateDoctor`: Admin or the doctor themself updating qualifications, experience, description, and fee.
+      * `toggleDoctorStatus`: Admin endpoint activating or deactivating doctor and their underlying user account.
+      * `deleteDoctor`: Admin endpoint soft-deactivating doctor account to preserve historical appointment references.
+
+17. [server/controllers/availability.controller.js]
+    - Purpose: Doctor shift schedule configuration and real-time slot generation.
+    - Handlers:
+      * `getDoctorAvailability`: Returns configured weekly schedules for a given doctor.
+      * `getAvailableSlots`: Core public slot calculation endpoint. Given `date=YYYY-MM-DD`, determines day of week, looks up schedule, fetches active appointments (`Booked`, `Checked In`, `Completed`), and invokes `generateSlots()` to return available slot array.
+      * `setDoctorAvailability`: Upserts working schedule and break periods for a doctor on a specific day of the week.
+      * `updateDoctorAvailability`: Updates specific availability record by ID.
+
+18. [server/controllers/appointment.controller.js]
+    - Purpose: Core appointment booking, retrieval, status transition, and cancellation engine.
+    - Handlers:
+      * `bookAppointment`:
+        - Validates input format (YYYY-MM-DD and HH:mm).
+        - Verifies doctor exists and `isActive === true`.
+        - Verifies date/time is not in the past.
+        - Verifies slot falls within doctor's working schedule and does not overlap with break periods.
+        - Pre-checks active appointments.
+        - Generates reference code and executes `Appointment.create()`.
+        - Catches MongoDB duplicate key error code 11000 and responds with `409 Conflict` if a concurrent user booked the slot simultaneously.
+      * `getMyAppointments`: Returns appointments for the authenticated user. If `role === 'patient'`, filters by `patientId`; if `role === 'doctor'`, filters by `doctorId`. Supports `?upcoming=true`.
+      * `getAppointmentById`: Returns single appointment with security checks (patient owner, assigned doctor, or clinic staff).
+      * `cancelAppointment`: Cancels an appointment if in `Booked` status. Enforces `canCancelAppointment()` cutoff threshold for patients. Releases the slot for re-booking.
+      * `updateAppointmentStatus`: Transitions appointment status (`Checked In`, `Completed`, `No Show`). Enforces that doctors can ONLY update their own appointments and follow valid status transitions.
+      * `getAllAppointments`: Master list for Admin and Receptionist with date, status, doctor, and patient search filters and pagination.
+
+19. [server/controllers/patient.controller.js]
+    - Purpose: Registered patient management and privacy enforcement.
+    - Handlers:
+      * `getPatients`: Admin and Receptionist endpoint listing registered patients with their booking count and search filters.
+      * `getPatientById`: Retrieves patient profile and appointment history. Enforces strict privacy (patients can only view themselves; doctors can only view patients with whom they have an appointment).
+      * `updatePatientProfile`: Allows patient to update permitted fields (`name`, `phone`).
+
+20. [server/controllers/dashboard.controller.js]
+    - Purpose: High-performance aggregated analytics for dashboards.
+    - Handlers:
+      * `getPatientDashboard`: Calculates total bookings, upcoming visits, completed visits, cancelled visits, next appointment spotlight card, and recent 5 bookings for the patient.
+      * `getDoctorDashboard`: Calculates today's patient queue, pending consults, completed consults, total bookings, upcoming visits, and weekly schedule for the doctor.
+      * `getAdminDashboard`: Aggregates clinic-wide statistics: total patients, total active doctors, total departments, total appointments, today's appointments, upcoming, completed, cancelled, and recent clinic activity.
+
+21. [server/controllers/user.controller.js]
+    - Purpose: Privileged user account management (Admin only).
+    - Handlers:
+      * `getUsers`: Lists system users filtered by role.
+      * `createUser`: Creates staff accounts (receptionist or admin).
+      * `toggleUserStatus`: Activates or deactivates user accounts (guards against admin deactivating their own account).
+
+
+--------------------------------------------------------------------------------
+2.7 EXPRESS ROUTE DEFINITIONS (routes/)
+--------------------------------------------------------------------------------
+
+22. [server/routes/auth.routes.js]
+    - Maps `/register`, `/login`, `/logout`, `/me` to `auth.controller.js`.
+
+23. [server/routes/department.routes.js]
+    - Maps GET to public methods; POST, PUT, DELETE to `protect, authorize('admin')`.
+
+24. [server/routes/doctor.routes.js]
+    - Maps public doctor listings and slot calculations.
+    - Maps doctor creation and deletion to `protect, authorize('admin')`.
+    - Maps profile and availability updates to `protect, authorize('admin', 'doctor')`.
+
+25. [server/routes/appointment.routes.js]
+    - Maps `POST /` to `protect, authorize('patient', 'receptionist', 'admin')`.
+    - Maps `GET /my` to `protect, authorize('patient', 'doctor')`.
+    - Maps `GET /` to `protect, authorize('admin', 'receptionist')`.
+    - Maps `PATCH /:id/cancel` and `PATCH /:id/status` with role guards.
+
+26. [server/routes/patient.routes.js]
+    - Maps patient profile updates and staff directory lookups.
+
+27. [server/routes/dashboard.routes.js]
+    - Maps `/patient` to `authorize('patient')`.
+    - Maps `/doctor` to `authorize('doctor')`.
+    - Maps `/admin` to `authorize('admin', 'receptionist')`.
+
+28. [server/routes/user.routes.js]
+    - Strictly protected with `protect, authorize('admin')`.
+
+
+--------------------------------------------------------------------------------
+2.8 DATABASE SCRIPTS (scripts/)
+--------------------------------------------------------------------------------
+
+29. [server/scripts/seed.js]
+    - Purpose: Populates MongoDB with realistic initial data.
+    - Actions:
+      * Clears existing collections.
+      * Seeds 6 departments (General Medicine, Cardiology, Pediatrics, Dermatology, Orthopedics, Neurology).
+      * Creates Administrator (`admin@carepulse.com`) and Receptionist (`reception@carepulse.com`) accounts.
+      * Creates 6 verified physicians with hashed passwords, bios, qualifications, fees, and Monday–Friday 09:00–17:00 schedules (13:00–14:00 lunch break).
+      * Seeds 10 registered patients.
+      * Seeds 10 appointments across past, today, and future dates covering all statuses (`Booked`, `Checked In`, `Completed`, `Cancelled`, `No Show`).
+
+30. [server/scripts/run-tests.js]
+    - Purpose: Automated integration test runner verifying all 30 business rules and API endpoints without third-party test framework dependencies.
+    - Actions:
+      * Starts an ephemeral test server on port 5999.
+      * Runs 7 test suites: System Health, Authentication & Role Boundaries, Department & Doctor Management, Doctor Working Hours & Slot Generation, Appointment Booking & Concurrency Conflict Prevention, Patient & Doctor Workflows, and Admin Operations.
+      * Tests the compound unique index by firing simultaneous duplicate booking requests and confirming `409 Conflict`.
+      * Tests cross-doctor isolation confirming `403 Forbidden`.
+
+
+================================================================================
+PART 3: FRONTEND ARCHITECTURE & FILE-BY-FILE EXPLANATION
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 BUILD & ENTRY CONFIGURATION
+--------------------------------------------------------------------------------
+
+31. [client/index.html]
+    - HTML5 document shell. Loads Inter and Poppins web fonts from Google Fonts. Mounts `<div id="root"></div>` and scripts `/src/main.jsx`.
+
+32. [client/vite.config.js]
+    - Configures Vite development server on port 5173 with proxy rule forwarding all `/api` requests to `http://localhost:5000`.
+
+33. [client/package.json]
+    - Declares dependencies: `react`, `react-dom`, `react-router-dom`, `axios`, `react-icons`, and Vite build toolchain.
+
+34. [client/src/main.jsx]
+    - Entry script bootstrapping React DOM into the root element and importing global CSS.
+
+
+--------------------------------------------------------------------------------
+3.2 APPLICATION ROUTING & ROOT COMPONENT
+--------------------------------------------------------------------------------
+
+35. [client/src/App.jsx]
+    - Root React application component.
+    - Wraps the application inside `<AuthProvider>` and `<BrowserRouter>`.
+    - Defines the entire route tree:
+      * Public Routes: `/`, `/about`, `/services`, `/doctors`, `/doctors/:id`, `/login`, `/register`.
+      * Patient Routes (wrapped in `ProtectedRoute allowedRoles={['patient']}`): `/patient/dashboard`, `/patient/doctors`, `/patient/book/:doctorId`, `/patient/confirmation/:id`, `/patient/appointments`, `/patient/history`, `/patient/profile`.
+      * Doctor Routes (wrapped in `ProtectedRoute allowedRoles={['doctor']}`): `/doctor/dashboard`, `/doctor/today`, `/doctor/weekly`, `/doctor/profile`.
+      * Staff & Admin Routes (wrapped in `ProtectedRoute allowedRoles={['admin', 'receptionist']}`): `/admin/dashboard`, `/admin/appointments`, `/admin/doctors`, `/admin/departments`, `/admin/patients`, `/admin/working-hours`.
+      * Admin Privileged Routes (`allowedRoles={['admin']}`): `/admin/doctors/new`, `/admin/doctors/edit/:id`, `/admin/users`.
+      * Fallback: 404 Not Found route.
+
+
+--------------------------------------------------------------------------------
+3.3 GLOBAL STYLING SYSTEM
+--------------------------------------------------------------------------------
+
+36. [client/src/styles/index.css]
+    - Pure CSS design system defining:
+      * CSS custom properties: Teal brand palette (`--primary-50` through `--primary-900`), slate neutrals, elevation box-shadows, and border-radius tokens.
+      * Typography resets and headings using Poppins and Inter.
+      * Component classes: `.btn`, `.btn-primary`, `.btn-secondary`, `.btn-outline`, `.btn-danger`, `.btn-sm`, `.btn-lg`.
+      * Container and Card utility classes: `.container`, `.card`.
+      * Form controls: `.form-group`, `.form-label`, `.form-input`, `.form-select`, `.form-textarea`, `.form-error`.
+      * Status Badges: `.status-badge.Booked`, `.status-badge.CheckedIn`, `.status-badge.Completed`, `.status-badge.Cancelled`, `.status-badge.NoShow`.
+      * Responsive data tables (`.data-table`, `.table-responsive`) and accessible modal overlays (`.modal-overlay`, `.modal-content`).
+      * Responsive CSS grids (`.grid-2`, `.grid-3`, `.grid-4`) adapting to mobile viewports.
+
+
+--------------------------------------------------------------------------------
+3.4 API SERVICES & HTTP INTERCEPTORS
+--------------------------------------------------------------------------------
+
+37. [client/src/services/api.js]
+    - Configures an Axios instance with base URL `/api`.
+    - Request Interceptor: Reads `carepulse_token` from `localStorage` and automatically injects `Authorization: Bearer <token>` into outgoing request headers.
+    - Response Interceptor: Intercepts `401 Unauthorized` responses, clears stale authentication storage, and dispatches a global `auth-expired` window event.
+    - Connections: Used by all frontend components, context, and pages to communicate with the backend.
+
+
+--------------------------------------------------------------------------------
+3.5 AUTHENTICATION CONTEXT & STATE MANAGEMENT
+--------------------------------------------------------------------------------
+
+38. [client/src/context/AuthContext.jsx]
+    - Creates and exports `AuthContext` and custom hook `useAuth()`.
+    - State: `user`, `token`, `loading`.
+    - Functions:
+      * Initial `useEffect`: Validates stored JWT against `GET /api/auth/me`. Discards token if expired.
+      * `login(email, password)`: Calls `POST /api/auth/login`, saves token and user in `localStorage` and state, returns user object.
+      * `register(userData)`: Calls `POST /api/auth/register`, sets session, returns user object.
+      * `logout()`: Calls `POST /api/auth/logout`, purges `localStorage`, resets user state.
+      * `updateUserState(fields)`: Synchronizes updated user details in memory and storage.
+
+
+--------------------------------------------------------------------------------
+3.6 ROUTE PROTECTION & ROLE GUARDS
+--------------------------------------------------------------------------------
+
+39. [client/src/routes/ProtectedRoute.jsx]
+    - Higher-order component guarding sensitive client routes.
+    - If `loading`, renders a clean spinner.
+    - If unauthenticated, redirects to `/login` preserving target location in `state.from`.
+    - If `allowedRoles` does not include `user.role`, intelligently redirects user to their appropriate role portal (`/patient/dashboard`, `/doctor/dashboard`, or `/admin/dashboard`).
+
+
+--------------------------------------------------------------------------------
+3.7 COMMON LAYOUTS & NAVIGATION UI
+--------------------------------------------------------------------------------
+
+40. [client/src/layouts/DashboardLayout.jsx]
+    - Shell layout for authenticated portals. Assembles `Navbar` at top, `Sidebar` on left, and `<Outlet />` for page content.
+
+41. [client/src/components/common/Navbar.jsx]
+    - Responsive sticky navigation bar. Shows clinic logo, public links (Home, About, Services, Doctors), and dynamic auth state.
+    - Authenticated state displays user role badge, greeting, dashboard shortcut, and logout button.
+
+42. [client/src/components/common/Sidebar.jsx]
+    - Vertical dashboard navigation tailored to each role:
+      * Patient: Overview, Browse Doctors, My Appointments, History, Profile.
+      * Doctor: Dashboard, Today's Schedule, Weekly Schedule, Profile.
+      * Admin & Receptionist: Overview, Appointments, Doctors, Departments, Patients, Working Hours.
+      * Admin Only: Add Doctor, Privileged User Accounts.
+
+43. [client/src/components/common/Footer.jsx]
+    - Professional healthcare footer with clinic mission, quick links, specialties, operating hours, emergency hotlines, and copyright notice.
+
+44. [client/src/components/common/StatusBadge.jsx]
+    - Visual badge component mapping appointment status (`Booked`, `Checked In`, `Completed`, `Cancelled`, `No Show`) to distinct icons and colors.
+
+
+--------------------------------------------------------------------------------
+3.8 PUBLIC FACING PAGES (pages/public/)
+--------------------------------------------------------------------------------
+
+45. [client/src/pages/public/Home.jsx]
+    - Public landing page with hero banner, 4-step "How It Works" guide, featured specialists fetched live from `/api/doctors`, departments overview, and clinic contact information.
+
+46. [client/src/pages/public/About.jsx]
+    - Clinical mission, medical ethics, patient-first philosophy, board-certification standards, and facilities overview.
+
+47. [client/src/pages/public/Services.jsx]
+    - Displays all active clinical departments with specialist counts and direct "View Doctors" links.
+
+48. [client/src/pages/public/Doctors.jsx]
+    - Public doctor directory. Real-time name search and department filter dropdown. Displays fees, experience, qualifications, and "Book Slot" buttons.
+
+49. [client/src/pages/public/DoctorDetails.jsx]
+    - Comprehensive doctor profile displaying biography, qualifications, experience, weekly consultation hours, lunch breaks, and direct booking button.
+
+50. [client/src/pages/public/Login.jsx]
+    - User login form with credentials authentication.
+    - Features 1-Click Demo Account Buttons for instant testing (Admin, Receptionist, Doctor, Patient).
+
+51. [client/src/pages/public/Register.jsx]
+    - Patient registration form with validation (name, email, phone, password, confirmation). Automatically logs patient in upon submission.
+
+
+--------------------------------------------------------------------------------
+3.9 PATIENT PORTAL PAGES (pages/patient/)
+--------------------------------------------------------------------------------
+
+52. [client/src/pages/patient/PatientDashboard.jsx]
+    - Patient homepage. Displays metrics, Next Appointment spotlight card, and recent consultation history table.
+
+53. [client/src/pages/patient/BookAppointment.jsx]
+    - Core interactive booking interface.
+    - Select physician and date. Calls `GET /api/doctors/:id/slots?date=...`.
+    - Renders slots as interactive clickable pills (available vs break vs booked).
+    - Submits to `POST /api/appointments`. Catches `409 Conflict` (race condition) and alerts user while auto-refreshing availability.
+
+54. [client/src/pages/patient/AppointmentConfirmation.jsx]
+    - Displays confirmed booking reference code (`APT-YYYYMMDD-XXXX`), doctor details, schedule, visit instructions, and print option.
+
+55. [client/src/pages/patient/MyAppointments.jsx]
+    - Active upcoming appointments list.
+    - Includes cancellation modal with cutoff validation (must be at least 2 hours before scheduled time).
+
+56. [client/src/pages/patient/AppointmentHistory.jsx]
+    - Searchable and filterable history of completed, cancelled, and past visits. Includes physician clinical notes modal.
+
+57. [client/src/pages/patient/PatientProfile.jsx]
+    - Allows patient to view and update their full name and contact phone number.
+
+
+--------------------------------------------------------------------------------
+3.10 DOCTOR PORTAL PAGES (pages/doctor/)
+--------------------------------------------------------------------------------
+
+58. [client/src/pages/doctor/DoctorDashboard.jsx]
+    - Physician dashboard displaying today's patient queue, pending counts, completed counts, and upcoming visits. Direct status updater buttons with clinical notes modal.
+
+59. [client/src/pages/doctor/DoctorTodaySchedule.jsx]
+    - Dedicated today's patient queue management. Allows doctors to mark patients as `Checked In`, `Completed`, or `No Show`, and record diagnoses/prescriptions.
+
+60. [client/src/pages/doctor/DoctorWeeklySchedule.jsx]
+    - Allows physicians to configure weekly shift hours, slot durations (15–60 mins), and lunch break periods.
+
+61. [client/src/pages/doctor/DoctorProfilePage.jsx]
+    - Allows physicians to update their clinical biography, degrees, and phone number.
+
+
+--------------------------------------------------------------------------------
+3.11 ADMINISTRATOR & RECEPTIONIST CONSOLES (pages/admin/)
+--------------------------------------------------------------------------------
+
+62. [client/src/pages/admin/AdminDashboard.jsx]
+    - Clinic executive overview displaying total patients, active physicians, departments, today's visits, and recent bookings.
+
+63. [client/src/pages/admin/ManageDoctors.jsx]
+    - Physician management console. Search, filter by department, edit profile, configure hours, and toggle account activation.
+
+64. [client/src/pages/admin/AddDoctor.jsx]
+    - Administrator form creating new physician user account and clinical profile.
+
+65. [client/src/pages/admin/EditDoctor.jsx]
+    - Form editing physician details, consultation fees, and active status.
+
+66. [client/src/pages/admin/ManageDepartments.jsx]
+    - Department CRUD interface. Modal for adding/editing departments and toggling active status.
+
+67. [client/src/pages/admin/ManagePatients.jsx]
+    - Patient directory with search and history inspection modal.
+
+68. [client/src/pages/admin/ManageAppointments.jsx]
+    - Master clinic appointment console. Filter by date, doctor, department, or status. Status updater and cancellation controls.
+
+69. [client/src/pages/admin/ManageWorkingHours.jsx]
+    - Allows clinic administrators and receptionists to configure working schedules and break periods for any physician.
+
+70. [client/src/pages/admin/ManageUsers.jsx]
+    - Administrator-only interface to manage user accounts, create receptionist/admin logins, and toggle active status.
+
+
+================================================================================
+PART 4: ROOT CONFIGURATION & SYSTEM DOCUMENTATION FILES
+================================================================================
+
+71. [.env.example]
+    - Template file showing required environment variables (`PORT`, `MONGODB_URI`, `JWT_SECRET`, `CANCELLATION_CUTOFF_HOURS`, `CLIENT_URL`).
+
+72. [.gitignore]
+    - Excludes `node_modules/`, `.env`, build outputs (`client/dist/`), and database lock files from git tracking.
+
+73. [README.md]
+    - Complete setup instructions, system architecture, feature overview, testing guide, and production deployment options.
+
+74. [docs/API_DOCUMENTATION.md]
+    - Exhaustive REST API specification detailing every route, HTTP method, parameters, request body schemas, and response examples.
+
+75. [docs/DATABASE_DESIGN.md]
+    - Technical document covering entity relationships, Mongoose schemas, compound unique indexes, and race-condition prevention mechanics.
+
+76. [docs/DESIGN_DECISIONS.md]
+    - Rationale for architectural decisions, role permissions matrix, assumptions, and edge cases handled.
+
+
+================================================================================
+PART 5: COMPLETE END-TO-END SYSTEM WORKFLOWS (FLOW EXPLANATIONS)
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 FLOW 1: USER REGISTRATION & AUTHENTICATION FLOW
+--------------------------------------------------------------------------------
+
+1. User visits `/register` and enters Name, Email, Phone, and Password.
+2. `Register.jsx` validates input on the client and calls `register()` from `AuthContext.jsx`.
+3. `AuthContext.jsx` issues `POST /api/auth/register` to Express backend via Axios.
+4. `auth.routes.js` routes request to `register()` in `auth.controller.js`.
+5. Controller verifies email uniqueness in `User` collection.
+6. `User.js` pre-save hook hashes password using bcrypt with salt factor 10.
+7. Record is saved in MongoDB; `generateToken()` creates signed JWT with user ID and role (`'patient'`).
+8. Backend returns 201 Created with token and user object.
+9. `AuthContext.jsx` saves token and user to `localStorage` and updates application state.
+10. User is immediately redirected to `/patient/dashboard`.
+
+Subsequent Logins:
+- User submits credentials on `/login`.
+- `auth.controller.js` finds user, selects hidden `password`, and calls `user.matchPassword()`.
+- If valid and `isActive: true`, issues fresh JWT.
+- Client stores token; Axios interceptor attaches it to all future requests.
+
+
+--------------------------------------------------------------------------------
+5.2 FLOW 2: DOCTOR CREATION & WORKING HOURS PROVISIONING FLOW
+--------------------------------------------------------------------------------
+
+1. Administrator logs in and navigates to `/admin/doctors/new`.
+2. Admin fills doctor details (Credentials, Department, Qualifications, Experience, Consultation Fee, Bio).
+3. `AddDoctor.jsx` submits `POST /api/doctors` with Bearer token.
+4. `auth.middleware.js` verifies token and verifies `req.user.role === 'admin'`.
+5. `doctor.controller.js` executes:
+   a. Creates `User` account with `role: 'doctor'`.
+   b. Creates `Doctor` record linking `userId` and `departmentId`.
+   c. Automatically provisions default availability schedules in `DoctorAvailability` collection for Monday through Friday (09:00 - 17:00, 30 min slots, 13:00 - 14:00 lunch break).
+6. Administrator or Doctor can navigate to `/doctor/weekly` or `/admin/working-hours` to customize specific shift hours and break periods via `POST /api/doctors/:id/availability`.
+
+
+--------------------------------------------------------------------------------
+5.3 FLOW 3: SLOT GENERATION & ATOMIC APPOINTMENT BOOKING FLOW
+--------------------------------------------------------------------------------
+
+Slot Generation:
+1. Patient visits `/patient/book/:doctorId` and selects an appointment date.
+2. `BookAppointment.jsx` triggers `GET /api/doctors/:doctorId/slots?date=YYYY-MM-DD`.
+3. `availability.controller.js` handles request:
+   a. Checks if date is strictly in the past (rejects if past).
+   b. Determines day of week (e.g., 2026-11-23 is Monday = 1).
+   c. Fetches doctor's schedule from `DoctorAvailability`.
+   d. Queries `Appointment` collection for active bookings on that date (`status: { $in: ['Booked', 'Checked In', 'Completed'] }`).
+   e. Calls `timeUtils.generateSlots()`:
+      - Iterates from shift start to end in steps of `slotDuration`.
+      - Checks each slot against lunch break periods (`isInBreakPeriod`).
+      - Checks if slot is already booked.
+      - Checks if slot is in the past for today's date.
+      - Returns array of slots marked `isAvailable: true/false` with status reason.
+4. `BookAppointment.jsx` renders slots as green (open) or grey (break/booked) buttons.
+
+Booking & Race Condition Prevention:
+5. Patient clicks an open slot (e.g. 10:00 AM) and clicks "Confirm Appointment".
+6. Client sends `POST /api/appointments` with `doctorId`, `appointmentDate`, `startTime`.
+7. `appointment.controller.js`:
+   a. Re-validates doctor active status, date, shift bounds, and break overlap.
+   b. Generates unique reference code (e.g. `APT-20261123-B8C1`).
+   c. Executes `Appointment.create()`.
+   d. SCENARIO A (Standard): Write succeeds. Returns 201 Created with populated appointment. Client redirects to `/patient/confirmation/:id`.
+   e. SCENARIO B (Simultaneous Double Booking Race Condition):
+      - Another patient confirmed the exact same slot at the exact same millisecond.
+      - MongoDB's compound unique partial index `{ doctorId: 1, appointmentDate: 1, startTime: 1 }` rejects the second write with error code `11000`.
+      - `appointment.controller.js` catches code 11000 and responds with `HTTP 409 Conflict` and `conflict: 'SLOT_ALREADY_BOOKED'`.
+      - `BookAppointment.jsx` catches 409, alerts the patient, and automatically re-fetches open slots so the patient can choose another slot.
+
+
+--------------------------------------------------------------------------------
+5.4 FLOW 4: CLINIC CONSULTATION FLOW (DOCTOR WORKFLOW)
+--------------------------------------------------------------------------------
+
+1. On the appointment day, the patient arrives at the clinic.
+2. Doctor (or Receptionist) views `/doctor/today` or `/admin/appointments`.
+3. Doctor clicks "Check In" button:
+   - Client sends `PATCH /api/appointments/:id/status` with `status: 'Checked In'`.
+   - Backend updates status to `Checked In`. Badge updates to yellow on all screens.
+4. Doctor conducts consultation with patient.
+5. Doctor clicks "Complete":
+   - Modal prompts doctor for consultation notes, diagnosis, and prescription advice.
+   - Doctor enters notes and confirms.
+   - Client sends `PATCH /api/appointments/:id/status` with `status: 'Completed'` and `notes: '...'`.
+   - Backend saves notes and transitions status to `Completed`.
+6. Patient can now view these notes anytime under `/patient/history`.
+
+
+--------------------------------------------------------------------------------
+5.5 FLOW 5: APPOINTMENT CANCELLATION & SLOT RELEASE FLOW
+--------------------------------------------------------------------------------
+
+1. Patient views their scheduled appointment under `/patient/appointments` and clicks "Cancel".
+2. Modal opens displaying the clinic cancellation policy (minimum 2 hours in advance).
+3. Patient provides cancellation reason and confirms.
+4. Client sends `PATCH /api/appointments/:id/cancel`.
+5. `appointment.controller.js`:
+   a. Verifies user ownership (`appointment.patientId === req.user._id`).
+   b. Calls `canCancelAppointment(appointmentDate, startTime, cutoffHours)`:
+      - If remaining time < cutoff (e.g., 1 hour before visit), returns `400 Bad Request` with hours remaining.
+   c. If valid, updates appointment:
+      - `status = 'Cancelled'`
+      - `cancelledAt = new Date()`
+      - `cancelledBy = req.user._id`
+      - `cancellationReason = '...'`
+   d. Saves appointment.
+6. SLOT RELEASE MECHANISM:
+   - Because the database compound unique index only indexes `{ status: { $in: ['Booked', 'Checked In', 'Completed'] } }`, transitioning to `'Cancelled'` automatically removes the appointment from the index constraint.
+   - The slot is instantly free and appears as available in subsequent slot lookups for any patient.
+
+
+--------------------------------------------------------------------------------
+5.6 FLOW 6: ROLE-BASED AUTHORIZATION & PROTECTED ROUTE FLOW
+--------------------------------------------------------------------------------
+
+1. Incoming Request on Client:
+   - User navigates to a URL (e.g. `/admin/users`).
+   - `App.jsx` evaluates `<ProtectedRoute allowedRoles={['admin']}>`.
+   - `ProtectedRoute.jsx` checks `useAuth()`:
+     * If unauthenticated: redirects to `/login`.
+     * If user role is `patient`: redirects to `/patient/dashboard`.
+     * If user role is `doctor`: redirects to `/doctor/dashboard`.
+     * If user role is `admin`: renders component.
+2. Backend API Verification:
+   - Client makes HTTP request to `/api/users`.
+   - Express router evaluates: `router.use(protect, authorize('admin'))`.
+   - `protect` verifies JWT and loads `req.user`.
+   - `authorize('admin')` checks `req.user.role === 'admin'`.
+     * If a receptionist or patient token is sent, backend responds with `403 Forbidden`.
+   - Ensures end-to-end security enforced at the server layer regardless of client manipulation.
+
+================================================================================
+END OF FILE EXPLANATION & ARCHITECTURE GUIDE
+================================================================================
